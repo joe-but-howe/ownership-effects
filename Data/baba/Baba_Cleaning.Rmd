@@ -1,0 +1,124 @@
+---
+title: "Ownership Spillover Cleaning"
+author: "Nikhil Kalyanpur"
+date: "3/31/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(ggplot2)
+library(vtable)
+library(stringr)
+library(lubridate)
+library(estudy2)
+library(lubridate)
+library(janitor)
+library(foreign)
+library(waldo)
+library(ggthemes)
+library(patchwork)
+setwd("/Users/nikhilkalyanpur/Documents/ownership_spillover/Data")
+
+```
+
+## The Effect of Economic Coercion on The Value of Firms With Shared Ownership
+
+The purpose of this document is to clean stock market data from the WRDS database that will be used in a series of event studies looking at the effect of different episodes of economic coercion on the value of firms that the target of coercion has a substantial stake in.
+
+The data downlaoded from WRDS contains several standard stock price covariates. We will convert the data into a wide-form that is usable with the estudy package in Stata. First we will covert the data into a wide format, and then we will calculate the rate of returns. We do this for 3 different episodes of coercion: The US ban against WeChat/Tencent, the Chinese Government's crackdown on Alibaba, and the Chinese Government's general push towards anti-monopoly against tech players, honing in on the effects on Tencent's de fato subsidiaries. 
+
+**Downloading and Cleaning the Stock Market Data**
+*Alibaba*
+Pulling in the WRDS data for the Alibaba Event.
+```{r, baba raw}
+setwd("/Users/nikhilkalyanpur/Documents/ownership_spillover/Data/baba")
+baba_data <- read_csv("wrds_baba_raw.csv") %>%  clean_names()
+vtable(baba_data)
+
+```
+Converting the data to a wide format, and then calculating the rate of returns for each stock
+```{r, baba cleaining}
+#filtering for chinese firms and selecting ticker, date, and close price
+baba_data_use <- baba_data %>%  select(tic, datadate, prccd)
+
+
+#converting to wide format
+baba_data_use <- baba_data_use %>% pivot_wider(names_from = "tic",
+                                                          values_from = "prccd")
+#converting date column to date type
+baba_data_use <- baba_data_use %>% mutate(datadate = mdy(datadate))
+vtable(baba_data_use)
+
+#converting to rate
+baba_rates <- get_rates_from_prices(baba_data_use,  
+                                       multi_day = TRUE,                     
+                                       quote = "Close")
+
+
+```
+
+Graphically Illustrating the Effects on Alibaba Share Price before and after the event
+```{r, baba graph}
+baba_change <- baba_rates %>% filter(datadate > "2020-12-10")%>% 
+  ggplot(aes(datadate, BABA)) +
+  geom_line() +
+  geom_vline(aes(xintercept=as.Date("2020-12-23")), color="red", linetype = "dashed") +
+  geom_hline(aes(yintercept = 0), color = "gray", linetype = "dashed") +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 2)) +
+  theme_minimal() +
+  labs(title = "Daily % Change",
+       x="",
+       y="") 
+baba_change
+
+
+```
+
+Outputting the dataframes
+```{r, outputting dataframe}
+write.csv(baba_rates, "baba_rates.csv", na='.')
+
+```
+
+
+
+*Tencent*
+Pulling in the WRDS data for the Alibaba Event.
+```{r, baba raw}
+setwd("/Users/nikhilkalyanpur/Documents/ownership_spillover/Data/monopoly")
+monopoly_data <- read_csv("wrds_monopoly_raw.csv") %>%  clean_names()
+vtable(baba_data)
+
+```
+
+Converting the data to a wide format, and then calculating the rate of returns for each stock
+```{r, baba cleaining}
+#filtering for chinese firms and selecting ticker, date, and close price
+monopoly_data_use <- monopoly_data %>%  select(tic, datadate, prccd)
+
+
+#converting to wide format
+monopoly_data_use <- monopoly_data_use %>% pivot_wider(names_from = "tic",
+                                                          values_from = "prccd")
+#converting date column to date type
+monopoly_data_use <- monopoly_data_use %>% mutate(datadate = mdy(datadate))
+vtable(monopoly_data_use)
+
+#converting to rate
+monopoly_rates <- get_rates_from_prices(monopoly_data_use,  
+                                       multi_day = TRUE,                     
+                                       quote = "Close")
+
+
+```
+
+
+Outputting the dataframes
+```{r, outputting dataframe}
+setwd("/Users/nikhilkalyanpur/Documents/ownership_spillover/Data/monopoly")
+write.csv(monopoly_rates, "monopoly_rates.csv", na='.')
+
+```

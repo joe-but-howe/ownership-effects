@@ -1,0 +1,486 @@
+---
+title: "China-Blacklist & TikTok Cleaning"
+author: "Nikhil Kalyanpur"
+date: "8/28/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(ggplot2)
+library(vtable)
+library(stringr)
+library(lubridate)
+library(estudy2)
+library(lubridate)
+library(janitor)
+library(foreign)
+library(waldo)
+library(ggthemes)
+library(patchwork)
+setwd("/Users/nikhilkalyanpur/Documents/China-Sanctions/Data/BlackList_And_TikTok")
+
+```
+
+## The Effect of US Sanctions on Chinese Firm value
+
+The purpose of this document is to clean stock market data from the WRDS database that will be used in a series of event studies looking at the effect of the Trump administrations policy moves against China on Chinese firm value.
+
+The data downlaoded from WRDS contains several standard stock price covariates. We will start by merging the data with the nationality of the companies, which we manually coded. 
+
+Next, we will convert the data into a wide-form that is usable with the estudy package in Stata. First we will covert the data into a wide format, and then we will calculate the rate of returns. We do this for 4 different subsets of firms - all Chinese firms traded on the NYSE and NASDAQ, only Chinese firms with Chinese headquarters, and then two subsets of Chinese State-Owned Enterprises.
+
+
+**Downloading and exploring the Nationality Data**
+
+We begin with uploading the data coded by Qi. We selected a potential universe of 729 firms trading on US exchanges to code for their nationalities and state-ownership. The 729 came from downloading data on ALL firms trading on American changes on the day of our first event date (june 24th 2020). We then selected all firms with their corporate headquarters in China or any of the major tax havens that end up being using for listing. We were further supplemented our list with data from another major chinese brokerage on foreign traded firms. 
+
+```{r, downloading the nationality data}
+nationality_data <- read_csv("nationality_list-0803.csv") %>%  clean_names()
+vtable(nationality_data)
+
+```
+
+```{r, summarizing the counts by stock exchange}
+china_by_exchange <- nationality_data %>%  filter(chinese == 1) %>% group_by(stock_exchange_code) %>% 
+  summarize(count = n()) 
+
+china_by_exchange %>% ggplot(aes(x = as.factor(stock_exchange_code), y = count)) + 
+             geom_bar(stat='identity') 
+
+```
+
+Here we plot the number of Chinese firms by exchange. As we would expect, most of the firms are collectively traded on the NYSE and the NASDAQ (11 and 14). Because these are the wto biggest exchanges, we focus our analysis on firms traded on them. 
+
+```{r, graphing the counts by sector}
+nationality_data %>%  filter(chinese == 1) %>% group_by(gic_sectors, stock_exchange_code) %>% 
+  summarize(count = n()) %>% 
+  ggplot(aes(x = as.factor(gic_sectors), y = count)) + 
+             geom_bar(stat='identity', aes(fill = as.factor(stock_exchange_code)))
+
+
+```
+
+We further see that we have a broad distribution of firms by sector, and that there does not appear to be a particularly clear pattern on firm sector and listing decisions. 
+
+
+Next we filtering the data to include only Chinese firms traded on major exchanges
+```{r, filtering for chinese on major exchanges}
+china_major_exchange <- nationality_data %>% filter(chinese == 1) %>%
+  filter(stock_exchange_code == 11 | stock_exchange_code == 14) 
+
+china_major_exchange_carla <- china_major_exchange %>% select(ticker_symbol, company_name)
+```
+
+
+The filter leaves us with 224 Chinese firms. We can visualzie the breakdown for each of the exchanges. 
+```{r, graphing the counts by sector on major exchanges}
+china_major_exchange %>%  filter(chinese == 1) %>% group_by(gic_sectors, stock_exchange_code) %>% 
+  summarize(count = n()) %>% 
+  ggplot(aes(x = as.factor(gic_sectors), y = count)) + 
+             geom_bar(stat='identity', aes(fill = as.factor(stock_exchange_code)))
+
+
+```
+
+
+Filtering for the merge
+```{r, filtering for merging}
+china_major_to_merge <- china_major_exchange %>% select(ticker_symbol, chinese, hongkong_macau, soe1, soe2, soe3, gic_sectors)
+
+
+```
+
+
+```{r, filtering for tech and communications}
+china_tech <- china_major_to_merge %>% filter(gic_sectors == 45 | gic_sectors == 50)
+
+china_tech_str_tk <-  china_tech %>%  pull(ticker_symbol) %>% noquote()
+```
+
+
+**Downloading and Cleaning the Stock Market Data**
+Pulling in the WRDS data.
+```{r, downloading the stock market data}
+market_data <- read_csv("wrds_BL_TK_raw.csv") %>%  clean_names()
+vtable(market_data)
+#To make the list more browasable we get rid of US listed firms
+market_data <- market_data %>% filter(fic != "USA")
+
+
+```
+
+We found a few discrepancies when we first cleaned the data. First, we found that GSMG had changed its ticker symbol in Feb 2020. So that we can include all the info from the firm we need to change the initial tic name to GSMG.
+
+```{r, changing GSMG}
+#we need to change the ticker for the GSMG to keep it consistent across the analysis. The company changed its trading symbol in Feb 2020
+market_data <- market_data %>% mutate(tic = case_when(
+  tic == "TKKS" ~ "GSMG",
+  TRUE ~ tic
+))
+
+vtable(market_data)
+```
+
+We also found that GTEC had some missing data so we need to inspect it further.
+```{r, GTEC check}
+
+GTEC <- market_data %>% filter(tic == "GTEC") %>% filter(is.na(prccd))
+#but it looks like nothing is missing
+rm("GTEC")
+
+```
+
+
+Now we can narrow the data to just firms on the major exchanges.
+```{r, filtering to major exchanges}
+market_data_use <- market_data %>% filter(exchg == 11 | exchg == 14)
+
+```
+
+
+Then we can merge the chinese and market data 
+```{r, merging nationality for blacklist}
+china_major_to_merge <- china_major_to_merge %>% rename(tic = ticker_symbol)
+
+market_data_use <- market_data_use %>% left_join(china_major_to_merge,
+                                                 #by = c("tic" = "ticker_symbol"),
+                                                 y.all = TRUE)
+
+```
+Testing the merge by counting the number of Chinese firms listed on the event date
+```{r, merge test}
+merge_test <- market_data_use %>% filter(datadate == "06/24/2020") %>% filter(chinese == 1) %>% filter(!is.na(prccd))
+#we appear to lose 2 firms
+
+merge_test <- market_data_use %>% filter(chinese == 1) %>%  filter(datadate == "06/24/2020") %>% select(tic) %>% mutate(merge_success = 1)
+
+chinese_merge_test <- china_major_to_merge %>% left_join(merge_test)
+chinese_merge_test %>% filter(is.na(merge_success))
+#these 2 firms appear to be XRF and DNJR, neither of which appear to be in the main raw data 
+
+```
+
+**Preparing the Chinese Dataset**
+
+```{r, converting chinese blacklist to wide}
+#saving a long version of the data
+chinese_market_long <- market_data_use %>% filter(chinese == 1)
+
+#filtering for chinese firms and selecting ticker, date, and close price
+chinese_market_use <- market_data_use %>% filter(chinese == 1) %>% select(tic, datadate, prccd)
+
+
+#converting to wide format
+chinese_market_use <- chinese_market_use %>% pivot_wider(names_from = "tic",
+                                                          values_from = "prccd")
+#converting date column to date type
+chinese_market_use <- chinese_market_use %>% mutate(datadate = mdy(datadate))
+vtable(chinese_market_use)
+
+#converting to rate
+chinese_rates <- get_rates_from_prices(chinese_market_use,  
+                                       multi_day = TRUE,                     
+                                       quote = "Close")
+
+```
+
+
+
+Importing and Cleaning the SPY data
+```{r, S&P cleaning and conversion}
+spy_use <- read_csv("SPY_raw.csv") %>% clean_names()
+
+#converting to wide format
+spy_use <- spy_use %>% select(tic, prccd, datadate) %>% pivot_wider(names_from = "tic", values_from = "prccd")
+
+#converting date column to date type
+spy_use <- spy_use %>% mutate(datadate = mdy(datadate))
+vtable(spy_use)
+
+spy_rates <- get_rates_from_prices(spy_use,  
+                                       multi_day = TRUE,                     
+                                       quote = "Close")
+
+```
+
+Importing and Cleaning S&P500
+```{r, cleaning S&P500}
+sp500_use <- read_csv("sp500_raw.csv") %>% clean_names()
+sp500_use <- sp500_use %>% select(date, close)
+
+sp500_rates <- get_rates_from_prices(sp500_use,  
+                                       multi_day = TRUE,                     
+                                       quote = "Close")
+sp500_rates <- sp500_rates %>% rename(sp500 = close)
+```
+
+Importing and Cleaning TCEHY
+```{r, cleaning TCHEY}
+TCEHY_use <- read_csv("TCEHY.csv") %>% clean_names()
+TCEHY_use <- TCEHY_use %>% select(date, close)
+
+TCEHY_rates <- get_rates_from_prices(TCEHY_use,  
+                                       multi_day = TRUE,                     
+                                       quote = "Close")
+TCEHY_rates <- TCEHY_rates %>% rename(TCEHY = close)
+
+
+TCEHY_use %>% filter(date > "2020-07-23")%>% 
+  ggplot(aes(date, close)) +
+  geom_line() +
+  geom_vline(aes(xintercept=as.Date("2020-08-06")), color="red", linetype = "dashed") +
+  theme_fivethirtyeight() +
+  labs(title = "Changes in Tencent's US Stock Price\nBefore and After Sanctions") 
+```
+
+```{r, TCEHY stock price change}
+tcehy_price <- TCEHY_use %>% filter(date > "2020-07-23")%>% 
+  ggplot(aes(date, close)) +
+  geom_line() +
+  geom_vline(aes(xintercept=as.Date("2020-08-06")), color="red", linetype = "dashed") +
+  scale_y_continuous(labels=scales::dollar_format()) +
+  theme_minimal() +
+  theme(text = element_text(family = "Georgia")) +
+  labs(title = "Price" ,
+       x="",
+       y="") 
+tcehy_price
+```
+
+```{r, TCEHY rate change}
+tcehy_change <- TCEHY_rates %>% filter(date > "2020-07-23")%>% 
+  ggplot(aes(date, TCEHY)) +
+  geom_line() +
+  geom_vline(aes(xintercept=as.Date("2020-08-06")), color="red", linetype = "dashed") +
+  geom_hline(aes(yintercept = 0), color = "gray", linetype = "dashed") +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 2)) +
+  theme_minimal() +
+  theme(text = element_text(family = "Georgia")) +
+  labs(title = "Daily % Change",
+       x="",
+       y="") 
+tcehy_change
+```
+
+```{r, TCEHY combined price}
+tcehy_combined <- tcehy_price / tcehy_change +
+  plot_annotation(title = "Figure 1: Tencent Stock Price Changes Before & After Sanctions")
+
+ggsave("tCEHY_event.jpg", tcehy_combined)
+```
+
+```{r price change from pre-event date}
+tcehy_change_eventday <- TCEHY_use %>% 
+  mutate(percent_change_eventday =  (close-72.57)/72.57) %>% 
+  filter(date > "2020-08-05")
+
+
+tcehy_percent_change <- tcehy_change_eventday %>% 
+  ggplot(aes(date, percent_change_eventday)) +
+  geom_line() +
+  geom_vline(aes(xintercept=as.Date("2020-08-06")), color="red", linetype = "dashed") +
+  geom_hline(aes(yintercept = 0), color = "gray", linetype = "dashed") +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 2)) +
+  theme_minimal() +
+  theme(text = element_text(family = "Georgia")) +
+  labs(title = "Cumulative % Change",
+       x="",
+       y="") 
+tcehy_percent_change
+```
+
+
+```{r, tcehy histogram}
+TCEHY_rates <- TCEHY_rates %>% 
+  mutate(event_date = case_when(
+    date == "2020-08-07" ~ 1,
+    TRUE ~ 0
+  ))
+
+TCEHY_extreme <- TCEHY_rates %>% filter(TCEHY < -.07)
+
+tcehy_distribution <- TCEHY_rates %>% filter(date > "2019-08-07") %>% 
+  ggplot(aes(x = TCEHY, fill = event_date, color = event_date)) + 
+  geom_density(alpha = .75, color = "black", fill = "gray") +
+  geom_vline(aes(xintercept = -0.0737219099), color="blue", linetype = "dashed") +
+  theme_minimal() +
+  theme(text = element_text(family = "Georgia")) +
+  labs(title = "Distribution of Daily Returns (1 year)",
+       y = "Density",
+       x = "")
+tcehy_distribution
+
+tcehy_combined_3 <-((tcehy_price +  tcehy_percent_change) / tcehy_distribution) 
+tcehy_combined_3
+ggsave("TCEHY_event_3.jpg", tcehy_combined_3)
+
+```
+```{r combining tencent graphs}
+tcehy_combined_3 <-((tcehy_price +  tcehy_percent_change) / tcehy_distribution) 
+tcehy_combined_3
+ggsave("TCEHY_event_3.jpg", tcehy_combined_3)
+
+```
+
+
+Importing and Cleaning the FXI (ETF of Chinese Companies trading in HKG)
+```{r, HKG ETF}
+FXI_use <- read_csv("FXI_raw.csv") %>% clean_names()
+FXI_use <- FXI_use %>% select(tic, prccd, datadate) %>% pivot_wider(names_from = "tic", values_from = "prccd")
+FXI_use <- FXI_use %>% mutate(datadate = mdy(datadate))
+
+FXI_rates <- get_rates_from_prices(FXI_use,  
+                                       multi_day = TRUE,                     
+                                       quote = "Close")
+
+```
+Importing and Cleaning FSLY
+```{r, FSLY}
+market_data_all <-  read_csv("wrds_BL_TK_raw.csv") %>%  clean_names()
+
+FSLY_use <- market_data_all %>% filter(tic == "FSLY") %>% select(tic, prccd, datadate) %>% pivot_wider(names_from = "tic", values_from = "prccd")
+
+FSLY_use <- FSLY_use %>% mutate(datadate = mdy(datadate))
+
+FSLY_rates <- get_rates_from_prices(FSLY_use,  
+                                       multi_day = TRUE,                     
+                                       quote = "Close")
+
+
+
+```
+
+
+
+Merging the index data into the main rates dataframe
+```{r, merging in indexes}
+chinese_rates <- chinese_rates %>% left_join(spy_rates)
+chinese_rates <- chinese_rates %>% left_join(sp500_rates, by = c("datadate" = "date"))
+chinese_rates <- chinese_rates %>% left_join(FXI_rates)
+chinese_rates <- chinese_rates %>% left_join(TCEHY_rates, by = c("datadate" = "date"))
+chinese_rates <- chinese_rates %>% left_join(FSLY_rates)
+```
+Creating time since event variables
+```{r, time since event}
+china_bl_time <- chinese_market_long %>% filter(tic == "NTP") %>% select(datadate) %>% 
+  mutate(date = mdy(datadate)) %>% filter(date < as.Date("2020/06/24")) %>% arrange(desc(date)) %>% mutate(raw_count = -1) %>% mutate(days_before_bl = cumsum(raw_count)) %>% select(date, days_before_bl)
+
+china_tk_time <- chinese_market_long %>% filter(tic == "NTP") %>% select(datadate) %>% 
+  mutate(date = mdy(datadate)) %>% filter(date < as.Date("2020/08/06")) %>% arrange(desc(date)) %>% mutate(raw_count = -1) %>% mutate(days_before_tk = cumsum(raw_count)) %>% select(date, days_before_tk)
+
+chinese_rates <- chinese_rates %>% left_join(china_bl_time, by = c("datadate" = "date"))
+chinese_rates <- chinese_rates %>% left_join(china_tk_time, by = c("datadate" = "date"))
+  
+```
+
+
+Outputting the dataframes
+```{r, outputting dataframe}
+write.csv(chinese_rates, "chinese_rates_BL_TK.csv", na='.')
+
+```
+
+Creating Strings for the 1year prior subgroups subgroups
+```{r, strings for group analysis}
+#all chinese firms trading on the event date
+chinese_firms_str_all <- chinese_market_long %>% filter(datadate == "06/24/2020") %>%  pull(tic) %>% noquote()
+#all chinese national firms trading on the event date
+chinese_nationals_str_all <- chinese_market_long %>%  filter(datadate == "06/24/2020") %>% filter(fic == "CHN") %>% pull(tic) %>% noquote()
+#all chinese SOEs trading on the event date
+soe1_str_all <- chinese_market_long %>%  filter(datadate == "06/24/2020") %>% filter(soe1 == 1) %>% pull(tic) %>% noquote()
+
+#now selecting firms that were trading at least 1 year before the blacklist event
+chinese_firms_str_1year <- chinese_market_long %>% filter(datadate == "06/24/2019") %>% filter(!is.na(prccd)) %>% pull(tic) %>% noquote()
+chinese_nationals_str_1year <- chinese_market_long %>%  filter(datadate == "06/24/2019") %>% filter(fic == "CHN") %>% filter(!is.na(prccd)) %>% pull(tic) %>% noquote()
+soe1_str_1year <- chinese_market_long %>%  filter(datadate == "06/24/2019") %>% filter(soe1 == 1) %>%  filter(!is.na(prccd)) %>% pull(tic) %>% noquote()
+
+
+
+
+
+
+#selecting all tech firms trading 1 year before the tencent event
+tech_firms_str_1year_TK <- chinese_market_long %>% filter(datadate == "08/06/2019") %>% filter(gsector == 50 | gsector == 45) %>%  filter(!is.na(prccd)) %>% pull(tic) %>% noquote()
+
+#selecting commsfirms trading 1 year before the tencent event
+comms_firms_str_1year_TK <- chinese_market_long %>% filter(datadate == "08/06/2019") %>% filter(gsector == 45) %>%  filter(!is.na(prccd)) %>% pull(tic) %>% noquote()
+
+
+#now selecting firms that were trading at least 1 year before the tiktok event
+chinese_firms_str_1year_tk <- chinese_market_long %>% filter(datadate == "08/06/2019") %>% filter(!is.na(prccd)) %>% pull(tic) %>% noquote()
+chinese_nationals_str_1year_tk <- chinese_market_long %>%  filter(datadate == "08/06/2019") %>% filter(fic == "CHN") %>% filter(!is.na(prccd)) %>% pull(tic) %>% noquote()
+soe1_str_1year_tk <- chinese_market_long %>%  filter(datadate == "08/06/2019") %>% filter(soe1 == 1) %>%  filter(!is.na(prccd)) %>% pull(tic) %>% noquote()
+
+
+
+
+```
+
+Creating the strings for firms trading 60, 90, and 120 days prior to the events
+```{r}
+chinese_market_long <- chinese_market_long %>% mutate(datadate = mdy(datadate))
+#Merging in the dates variable into the long data
+chinese_market_long <- chinese_market_long %>% left_join(china_bl_time, by = c("datadate" = "date"), y.all = TRUE)
+chinese_market_long <- chinese_market_long %>% left_join(china_tk_time, by = c("datadate" = "date"), y.all = TRUE)
+
+####BLACKLIST#####
+### All firms Blacklist
+#60
+chinese_firms_str_bl_60 <-  chinese_market_long %>% filter(days_before_bl == -60) %>%  pull(tic) %>% noquote()
+#90 Days
+chinese_firms_str_bl_90 <-  chinese_market_long %>% filter(days_before_bl == -90) %>%  pull(tic) %>% noquote()
+#120 Days
+chinese_firms_str_bl_120 <-  chinese_market_long %>% filter(days_before_bl == -120) %>%  pull(tic) %>% noquote()
+
+### Chinese Nationals Blacklist
+#60
+chinese_nationals_str_bl_60 <-  chinese_market_long %>% filter(days_before_bl == -60) %>%   filter(fic == "CHN") %>% pull(tic) %>% noquote()
+#90 Days
+chinese_nationals_str_bl_90 <-  chinese_market_long %>% filter(days_before_bl == -90) %>%  filter(fic == "CHN") %>% pull(tic) %>% noquote()
+#120 Days
+chinese_nationals_str_bl_120 <-  chinese_market_long %>% filter(days_before_bl == -120) %>% filter(fic == "CHN") %>%  pull(tic) %>% noquote()
+
+### Chinese SOEs Blacklist
+#60
+soe1_str_bl_60 <-  chinese_market_long %>% filter(days_before_bl == -60) %>%   filter(soe1 == 1) %>% pull(tic) %>% noquote()
+#90 Days
+soe1_str_bl_90 <-  chinese_market_long %>% filter(days_before_bl == -90) %>%  filter(soe1 == 1) %>% pull(tic) %>% noquote()
+#120 Days
+soe1_str_bl_120 <-  chinese_market_long %>% filter(days_before_bl == -120) %>% filter(soe1 == 1) %>%  pull(tic) %>% noquote()
+
+
+#####TikTok######
+### All firms tkacklist
+#60
+chinese_firms_str_tk_60 <-  chinese_market_long %>% filter(days_before_tk == -60) %>%  pull(tic) %>% noquote()
+#90 Days
+chinese_firms_str_tk_90 <-  chinese_market_long %>% filter(days_before_tk == -90) %>%  pull(tic) %>% noquote()
+#120 Days
+chinese_firms_str_tk_120 <-  chinese_market_long %>% filter(days_before_tk == -120) %>%  pull(tic) %>% noquote()
+
+### Chinese Nationals tkacklist
+#60
+chinese_nationals_str_tk_60 <-  chinese_market_long %>% filter(days_before_tk == -60) %>%   filter(fic == "CHN") %>% pull(tic) %>% noquote()
+#90 Days
+chinese_nationals_str_tk_90 <-  chinese_market_long %>% filter(days_before_tk == -90) %>%  filter(fic == "CHN") %>% pull(tic) %>% noquote()
+#120 Days
+chinese_nationals_str_tk_120 <-  chinese_market_long %>% filter(days_before_tk == -120) %>% filter(fic == "CHN") %>%  pull(tic) %>% noquote()
+
+### Chinese SOEs tkacklist
+#60
+soe1_str_tk_60 <-  chinese_market_long %>% filter(days_before_tk == -60) %>%   filter(soe1 == 1) %>% pull(tic) %>% noquote()
+#90 Days
+soe1_str_tk_90 <-  chinese_market_long %>% filter(days_before_tk == -90) %>%  filter(soe1 == 1) %>% pull(tic) %>% noquote()
+#120 Days
+soe1_str_tk_120 <-  chinese_market_long %>% filter(days_before_tk == -120) %>% filter(soe1 == 1) %>%  pull(tic) %>% noquote()
+
+
+chinese_firms_onlyBL_60 <- chinese_firms_str_bl_60[!chinese_firms_str_bl_60 %in% chinese_firms_str_1year]
+
+```
+
+
+
