@@ -13,19 +13,64 @@ library(broom)
 library(lubridate)
 library(estudy2)
 library(here)
-here::i_am("ownership-effects")
+library(ggthemes)
+here::i_am("ownership-effects.Rproj")
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ## Purpose and Setup
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+The goal of the project is to understand how ownership ties across firms influences the boundaries of economic coercion. We will be investigating how sanctions against WeChat influenced other companies owned by Tencent, and how political pressure on Alibaba influenced other companies owned by the Chinese government. 
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+We'll be working with stock market data collected from WRDS that has already been cleaned (see: BL_TK_Cleaning). They've already been converted into the necessary wide, rates format that the estudy2 package works with for event studies. 
 
-```{r cars}
-summary(cars)
+##Tencent Analysis
+We'll begin by first looking at what happened to the share price of Tencent, the owner of WeChat, when the Trump Administration announced it would be banning the messaging service from the US. The sanctions were announced on August 6th. 
+
+
+```{r loading and cleaning tencent data}
+tencent_event_data <- read_csv("data/tencent/chinese_rates_BL_TK.csv")
+vtable(tencent_event_data)
+
+#converting a couple of variables to numeric and renaming the date variable
+tencent_event_data <- tencent_event_data %>% 
+  mutate(days_before_tk = as.numeric(days_before_tk),
+         TCEHY = as.numeric(TCEHY)) %>% 
+  rename("date" = "datadate")
+
+tencent_event_data %>% 
+  filter(date < "2020-08-12" & date >"2020-08-01") %>% 
+  ggplot(aes(date, TCEHY)) +
+  geom_line() + 
+  theme_minimal()
 ```
+The plot above shows a pretty dramatic drop in Tencent's stock price the day after the sanctions announcement - just under 7.5%.
+We'll use the estudy2 package and the S&P500 as our reference rate to assess whether the size and statistical significance of the effect.
+
+```{r setting up the study}
+
+five_days_before_tencent <- tencent_event_data %>% 
+filter(days_before_tk == -5) %>% 
+  pull(date)
+
+thirty_days_before_tencent <- tencent_event_data %>% 
+filter(days_before_tk == -30) %>% 
+  pull(date)
+
+sixty_days_before_tencent <- tencent_event_data %>% 
+filter(days_before_tk == -60) %>% 
+  pull(date)
+
+ninety_days_before_tencent <- tencent_event_data %>% 
+filter(days_before_tk == -90) %>% 
+  pull(date)
+
+onetwenty_days_before_tencent <- tencent_event_data %>% 
+filter(days_before_tk == -120) %>% 
+  pull(date)
+
+```
+
 
 ## Including Plots
 
