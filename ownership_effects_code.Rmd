@@ -68,9 +68,32 @@ filter(days_before_tk == -90) %>%
 onetwenty_days_before_tencent <- tencent_event_data %>% 
 filter(days_before_tk == -120) %>% 
   pull(date)
+#creating reference rate dataframe
+spy_tencent <- tencent_event_data %>% select(date, SPY)
+```
+
+
+Now that we've created the necessary time identifiers we can run some event studies focused on just Tencent.
+```{r Tencent estudy 90 days before event}
+tencent_only <- tencent_event_data %>% select(date, TCEHY, FSLY)
+
+TCEHY_returns <- apply_market_model(
+    rates = tencent_only,
+    regressor = spy_tencent,
+    same_regressor_for_all = TRUE,
+    market_model = "sim",
+    estimation_method = "ols",
+    estimation_start = ninety_days_before_tencent,
+    estimation_end = five_days_before_tencent
+)
+
+estudy2::parametric_tests(list_of_returns = TCEHY_returns,
+                 event_start = as.Date("2020-08-06"),
+                 event_end = as.Date("2020-08-12"))
 
 ```
 
+We see clearly negative effects for the day, and the day after the event on the stock price of tencent and fastly(another company indirectly affected by the sanctions). These results then dissipate for the following three days. The market reaction was quick. 
 
 ## Including Plots
 
